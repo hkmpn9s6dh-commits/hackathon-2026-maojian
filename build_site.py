@@ -1,0 +1,404 @@
+"""生成作品页：site/index.html + 字体子集 + 图片。
+
+单一来源仍然是 story.py：分镜表、旁白、数字都从这里读，
+所以页面不可能和片子对不上（verify.py 会核对分镜表，build_site 会核对镜头数）。
+
+用法：py -3 build_site.py
+"""
+from __future__ import annotations
+
+import hashlib
+import shutil
+import subprocess
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+import story
+
+ROOT = Path(__file__).resolve().parent
+SITE = ROOT / "site"
+ASSETS = SITE / "assets"
+OUT = ROOT / "out"
+FONT_SRC = "C:/Windows/Fonts/Noto Sans SC (TrueType).otf"
+FONT_BOLD = "C:/Windows/Fonts/Noto Sans SC Bold (TrueType).otf"
+
+INK = "#08090b"
+PAPER = "#f2ede4"
+
+
+def shot_table() -> str:
+    rows = []
+    for i, s in enumerate(story.SHOTS, 1):
+        tc = f"{int(s.start)//60:02d}:{s.start % 60:04.1f}"
+        rows.append(
+            f"<tr><td class=n>{i:02d}</td><td class=tc>{tc}</td><td class=d>{s.dur:.1f}s</td>"
+            f"<td>{s.note}</td><td class=k>{s.move}</td></tr>")
+    return "\n".join(rows)
+
+
+def vo_table() -> str:
+    rows = []
+    for v in story.VOICES:
+        rows.append(f"<tr><td class=n>{v.idx:02d}</td><td class=tc>{v.t:05.1f}s</td>"
+                    f"<td class=cn>{v.text}</td><td class=en>{v.en}</td></tr>")
+    return "\n".join(rows)
+
+
+def html() -> str:
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%2308090b'/%3E%3Ccircle cx='32' cy='32' r='19' fill='none' stroke='%23d69c60' stroke-width='4'/%3E%3Ccircle cx='32' cy='32' r='5' fill='%23d69c60'/%3E%3C/svg%3E">
+<title>第五个轮子 · THE FIFTH WHEEL｜茅箭 · 中国商用车之都</title>
+<meta name="description" content="十堰市茅箭区首届 Token 产业 IP 创意大赛 · AI 产业宣传片。一台重卡四个轮子走路，第五个轮子只负责接住重量。">
+<style>
+@font-face{{font-family:zw;src:url(assets/noto-sub.woff2)format("woff2");font-display:swap;
+  font-weight:100 900;}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+:root{{--ink:{INK};--paper:{PAPER};--steel:#8d949b;--dim:#5d646b;--amber:#d69c60;--line:#23262a}}
+html{{background:var(--ink);color:var(--paper);-webkit-font-smoothing:antialiased}}
+body{{font-family:zw,"Noto Sans SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;
+  font-size:16px;line-height:1.75;letter-spacing:.01em}}
+.wrap{{max-width:1120px;margin:0 auto;padding:0 32px}}
+a{{color:var(--amber);text-decoration:none;border-bottom:1px solid #45372a}}
+a:hover{{border-color:var(--amber)}}
+/* ---------- 头 ---------- */
+header{{padding:56px 0 0}}
+.kicker{{display:flex;gap:14px;align-items:center;font-size:12px;letter-spacing:.22em;
+  color:var(--steel);text-transform:uppercase}}
+.kicker i{{width:34px;height:1px;background:var(--amber);display:block}}
+h1{{font-size:clamp(52px,9vw,112px);line-height:.98;font-weight:700;letter-spacing:-.02em;
+  margin:26px 0 18px}}
+h1 em{{font-style:normal;color:var(--amber)}}
+.sub{{font-size:clamp(17px,2.1vw,22px);color:#cfc8bd;max-width:46ch;line-height:1.65}}
+.meta{{display:flex;flex-wrap:wrap;gap:26px;margin:34px 0 0;padding:18px 0;
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  font-size:13px;color:var(--steel);letter-spacing:.04em}}
+.meta b{{color:var(--paper);font-weight:500}}
+/* ---------- 片 ---------- */
+.film{{margin:40px 0 0;background:#000;border:1px solid var(--line)}}
+video{{width:100%;display:block;aspect-ratio:16/9}}
+.cap{{font-size:12.5px;color:var(--dim);padding:12px 2px 0;letter-spacing:.03em;
+  display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}}
+/* ---------- 段 ---------- */
+section{{padding:76px 0 0}}
+h2{{font-size:12px;letter-spacing:.24em;color:var(--amber);font-weight:500;margin-bottom:26px;
+  display:flex;align-items:center;gap:14px}}
+h2:after{{content:"";flex:1;height:1px;background:var(--line)}}
+.lead{{font-size:clamp(22px,3vw,34px);line-height:1.45;font-weight:400;letter-spacing:-.01em;
+  max-width:34ch;color:#efe8dc}}
+.lead b{{color:var(--amber);font-weight:500}}
+.two{{display:grid;grid-template-columns:1fr 1fr;gap:44px}}
+p+p{{margin-top:14px}}
+.muted{{color:#a8a29a}}
+.small{{font-size:14px;color:var(--steel)}}
+blockquote{{border-left:2px solid var(--amber);padding:4px 0 4px 20px;color:#ded6c9;
+  font-size:clamp(17px,2.2vw,21px);line-height:1.7}}
+/* ---------- 数字 ---------- */
+.figs{{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+  border:1px solid var(--line);margin-top:8px}}
+.fig{{background:#0b0c0e;padding:26px 24px 22px}}
+.fig .v{{font-size:clamp(34px,4.6vw,54px);line-height:1;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums}}
+.fig .q{{font-size:13px;color:var(--steel);margin-top:10px;line-height:1.6}}
+.fig .s{{font-size:11.5px;color:var(--dim);margin-top:12px}}
+/* ---------- 表 ---------- */
+table{{width:100%;border-collapse:collapse;font-size:13.5px}}
+th,td{{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}}
+th{{font-size:11px;letter-spacing:.16em;color:var(--dim);font-weight:500;text-transform:uppercase}}
+td.n,td.tc,td.d{{color:var(--steel);font-variant-numeric:tabular-nums;white-space:nowrap}}
+td.k{{color:var(--dim);font-size:12px}}
+td.cn{{color:var(--paper)}}
+td.en{{color:var(--steel);font-size:12.5px}}
+/* ---------- 关键帧 ---------- */
+.grid{{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:8px}}
+.grid figure{{position:relative;overflow:hidden;border:1px solid var(--line)}}
+.grid img{{width:100%;display:block;aspect-ratio:16/9;object-fit:cover}}
+.grid figcaption{{position:absolute;left:10px;bottom:8px;font-size:11px;color:#cfc8bd;
+  background:rgba(6,7,9,.62);padding:3px 7px;letter-spacing:.05em}}
+/* ---------- 清单 ---------- */
+ul{{list-style:none}}
+li{{padding:10px 0 10px 22px;border-bottom:1px solid var(--line);position:relative;font-size:14.5px}}
+li:before{{content:"";position:absolute;left:2px;top:19px;width:8px;height:1px;background:var(--amber)}}
+li b{{font-weight:500}}
+code{{font-family:ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;font-size:12.8px;
+  color:#cfc8bd;background:#141619;padding:1px 6px}}
+footer{{margin-top:88px;border-top:1px solid var(--line);padding:30px 0 64px;font-size:12.5px;
+  color:var(--dim);display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}}
+@media(max-width:760px){{
+  .two,.figs,.grid{{grid-template-columns:1fr}}
+  .wrap{{padding:0 20px}}
+  section{{padding:56px 0 0}}
+}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="kicker"><i></i><span>赛道 AS · AI 产业宣传片 · 2026</span></div>
+  <h1>第五个<em>轮子</em></h1>
+  <p class="sub">一台重卡有四只轮子走路。第五个轮子不走路——<br>它只做一件事：接住重量。茅箭在产业链上的位置，就是那第五个。</p>
+  <div class="meta">
+    <span><b>{story.DUR:.0f} 秒</b> 片长</span>
+    <span><b>1920×1080</b> / 24 fps</span>
+    <span><b>19</b> 个镜头</span>
+    <span><b>10</b> 句旁白</span>
+    <span>十堰市茅箭区 · 中国商用车之都</span>
+  </div>
+</header>
+
+<div class="film"><video controls playsinline preload="metadata" poster="assets/poster.jpg">
+<source src="assets/maojian.mp4" type="video/mp4"></video></div>
+<div class="cap"><span>《第五个轮子》/ THE FIFTH WHEEL</span><span>全部画面由生成式 AI 制作；旁白、音效、配乐自产</span></div>
+
+<section>
+  <h2>它讲的是什么</h2>
+  <p class="lead">四只轮子负责<b>走</b>，那是力气；<br>第五个轮子负责<b>接</b>，那是信任。</p>
+  <div class="two" style="margin-top:34px">
+    <div>
+      <p>半挂牵引车和半挂车之间，靠一个叫「牵引座」的铸钢件连起来。它不接触地面，
+      却要承受整节挂车的重量。行内把它叫作<b>第五个轮子</b>——fifth wheel coupling。</p>
+      <p>茅箭有 1,150 家汽车及零部件企业，绝大多数不造整车。它们做的正是这件事：
+      钢板、齿轮、同步器、桥壳、线束——把别人车上的重量，接住。</p>
+      <p class="muted">所以这条片子不拍车头，拍连接。</p>
+    </div>
+    <div>
+      <blockquote>「这座城没有海。<br>于是它把海，装进了车轮。」</blockquote>
+      <p class="small" style="margin-top:18px">茅箭在秦巴山区，没有港口、没有码头。
+      它的出海口是四十万辆产能、是 1,150 家配套企业、是一辆辆从山口开出去的重卡。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>五段论证</h2>
+  <div class="two">
+    <div>
+      <p><b class="small" style="color:var(--amber)">01　立题 / 0–27s</b><br>
+      山口的晨雾里，一辆重卡的四只轮子碾过湿沥青。旁白只说一句：一台重卡，四个轮子走路。</p>
+      <p><b class="small" style="color:var(--amber)">02　转折 / 27–53s</b><br>
+      镜头钻到车底，沿传动轴往前；黄昏货场里，牵引车倒进挂车底下，挂车落座——全片第一声「咔」。</p>
+      <p><b class="small" style="color:var(--amber)">03　展开 / 53–107s</b><br>
+      钢卷落垛、机器人起弧、车身合装；货架上成排的同步器、千分尺上的一格、产线屏幕上的线框车。
+      三个数字在这里落地：1,150 家、90%、400,000 辆产能。</p>
+    </div>
+    <div>
+      <p><b class="small" style="color:var(--amber)">04　出海 / 107–144s</b><br>
+      出厂门，上高架，进滚装船的舱口，落到另一片大陆的公路上。<br>
+      「这座城没有海。」「于是它把海，装进了车轮。」</p>
+      <p><b class="small" style="color:var(--amber)">05　收 / 144–156s</b><br>
+      反向动作：挂车立在支腿上，牵引车开走，间隙张开。<br>
+      画面在「咔」之前落黑，最后一声落在黑场上；两秒后落版。</p>
+      <p class="small muted">结构上的取舍：全片没有一个人物、没有一句口号。
+      156 秒里旁白只占 42 秒，其余交给金属的声音。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>三个数字，都有出处</h2>
+  <div class="figs">
+    <div class="fig"><div class="v">1,150</div>
+      <div class="q">汽车及零部件企业</div>
+      <div class="s">茅箭区人民政府，2026-09-20</div></div>
+    <div class="fig"><div class="v">90%</div>
+      <div class="q">同步器国内市场占比（同创）</div>
+      <div class="s">云上十堰·2026 十堰两会</div></div>
+    <div class="fig"><div class="v">400,000</div>
+      <div class="q">整车及专用车年产能</div>
+      <div class="s">同上（产能，不是产量）</div></div>
+  </div>
+  <p class="small" style="margin-top:16px">出处原文与口径说明见仓库 <code>docs/03-SOURCES.md</code>；
+  查不到原文的数字一律没有进片子。</p>
+</section>
+
+<section>
+  <h2>分镜（{len(story.SHOTS)} 镜 / {story.DUR:.0f} 秒）</h2>
+  <table>
+    <thead><tr><th>#</th><th>入点</th><th>时长</th><th>这一镜承担的论证</th><th>运镜</th></tr></thead>
+    <tbody>
+{shot_table()}
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>旁白与字幕</h2>
+  <table>
+    <thead><tr><th>#</th><th>入点</th><th>中文</th><th>English</th></tr></thead>
+    <tbody>
+{vo_table()}
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>六帧</h2>
+  <div class="grid">
+    <figure><img src="assets/frames/f01.jpg" alt=""><figcaption>00:00 山口</figcaption></figure>
+    <figure><img src="assets/frames/f02.jpg" alt=""><figcaption>00:45 牵引销落座</figcaption></figure>
+    <figure><img src="assets/frames/f03.jpg" alt=""><figcaption>01:01 起弧</figcaption></figure>
+    <figure><img src="assets/frames/f04.jpg" alt=""><figcaption>01:26 同步器</figcaption></figure>
+    <figure><img src="assets/frames/f05.jpg" alt=""><figcaption>02:05 滚装船</figcaption></figure>
+    <figure><img src="assets/frames/f06.jpg" alt=""><figcaption>02:32 落版</figcaption></figure>
+  </div>
+</section>
+
+<section>
+  <h2>怎么做出来的</h2>
+  <div class="two">
+    <div>
+      <p><b>画面</b>　18 张生成底图（3:2，1536×1024），逐张去掉生成器水印、放大到 2400×1600，
+      再用代码做窗口取景：每镜一种运镜（推、拉、横移、升），全程无一张是「静止贴图」。</p>
+      <p><b>调色</b>　一套冷钢蓝灰 + 单一暖色的分级，四个预设（cool / steel / warm / dusk），
+      逐点运算先对整张底本做一次，再裁窗口——结果与逐帧调色等价，但便宜一百倍。</p>
+      <p><b>声音</b>　没有一条素材是拿来的：低频 drone、52 BPM 的机械脉冲、16 个事件音（牵引销、
+      冲压、起弧、滚装船汽笛……）全部用 numpy 合成；旁白用 TTS，−16 LUFS / 真峰 −1.5 dBTP。</p>
+    </div>
+    <div>
+      <p><b>单一来源</b>　镜头、时长、运镜、调色、旁白、字幕、音效点全部写在 <code>story.py</code>。
+      分镜表由脚本生成，<code>verify.py</code> 反过来核对文档与片子是否一致——改时长忘了重生成文档，构建就会失败。</p>
+      <p><b>可验收</b>　<code>py -3 verify.py</code> 跑 {VERIFY_N} 条断言：容器参数、时长区间、色彩标注、
+      响度与真峰、19 镜的纯色/曝光/切点、字幕安全区与局部对比、黑场与淡入淡出、旁白窗口与重叠。
+      退出码就是结论。</p>
+      <p><b>人工决策</b>　概念、结构、每一镜的论证、数字取舍、以及三轮盲读后的修改，都是人做的；
+      生成器只负责底图，镜头语言由代码控制。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>交付清单</h2>
+  <ul>
+    <li><b>成片</b>　<code>out/maojian.mp4</code>　1920×1080 / 24fps / H.264 / AAC 48k / {story.DUR:.0f}s</li>
+    <li><b>封面</b>　<code>out/cover.jpg</code>　1920×1080（平台封面用）</li>
+    <li><b>作品简介</b>　<code>submission/01-简介.md</code></li>
+    <li><b>创作说明</b>　<code>submission/02-创作说明.md</code>（含 AI 工具清单与生成路径）</li>
+    <li><b>数据出处</b>　<code>docs/03-SOURCES.md</code></li>
+    <li><b>验收</b>　<code>py -3 verify.py</code>　→ 退出码 0</li>
+  </ul>
+</section>
+
+<footer>
+  <span>赛道 AS · 十堰市茅箭区首届 Token 产业 IP 创意大赛 · AI 产业宣传片</span>
+  <span>本页与影片均由生成式 AI 参与制作 · 2026-11</span>
+</footer>
+
+</div>
+</body>
+</html>
+"""
+
+
+VERIFY_N = 44
+
+
+def stills() -> None:
+    (ASSETS / "frames").mkdir(parents=True, exist_ok=True)
+    picks = [("f01", 5.0), ("f02", 47.0), ("f03", 61.6), ("f04", 89.0),
+             ("f05", 128.0), ("f06", 152.0)]
+    r = None
+    for name, t in picks:
+        dst = ASSETS / "frames" / f"{name}.jpg"
+        if dst.exists():
+            continue
+        if r is None:
+            import render
+            r = render.Renderer(no_text=True)   # 画廊用干净帧：字幕只留在片子里
+        i = int(round(t * story.FPS))
+        fr = render.fade_frames(r.frame(i), i / story.FPS)
+        ok, buf = cv2.imencode(".jpg", fr, [int(cv2.IMWRITE_JPEG_QUALITY), 88])
+        buf.tofile(str(dst))
+        print("still", dst.name)
+
+
+def cover(t: float = 52.0) -> None:
+    """1920×1080 封面：取锁钩镜的干净帧（不烧字幕），压暗左下，压标题。"""
+    from PIL import Image, ImageDraw, ImageFont
+    import render
+    dst = OUT / "cover.jpg"
+    r = render.Renderer(no_text=True)
+    i = int(round(t * story.FPS))
+    fr = render.fade_frames(r.frame(i), i / story.FPS)
+    img = Image.fromarray(fr[:, :, ::-1]).resize((1920, 1080), Image.LANCZOS)
+    ov = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov)
+    for y in range(1080):
+        a = int(150 * max(0.0, (y - 380) / 700) ** 1.25)
+        d.line([(0, y), (1920, y)], fill=(6, 7, 9, a))
+    d = ImageDraw.Draw(ov)
+    f1 = ImageFont.truetype(FONT_BOLD, 118)
+    f2 = ImageFont.truetype(FONT_SRC, 34)
+    f3 = ImageFont.truetype("C:/Windows/Fonts/Deng.ttf", 22)
+    d.text((120, 620), "第五个轮子", font=f1, fill=(242, 236, 226, 255))
+    d.text((124, 766), "茅箭 · 中国商用车之都", font=f2, fill=(198, 190, 178, 255))
+    d.text((126, 826), "M A O J I A N   ·   T H E   F I F T H   W H E E L", font=f3, fill=(150, 146, 138, 255))
+    img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+    img.save(dst, quality=92)
+    print("wrote", dst)
+
+
+def font_subset(chars: str) -> None:
+    chars = "".join(sorted(set(chars)))
+    tmp = OUT / "_charset.txt"
+    tmp.write_text(chars, encoding="utf-8")
+    dst = ASSETS / "noto-sub.woff2"
+    cmd = ["py", "-3", "-m", "fontTools.subset", FONT_SRC,
+           f"--text-file={tmp}", "--flavor=woff2", "--layout-features=*",
+           "--drop-tables+=DSIG", f"--output-file={dst}"]
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        print(p.stderr[-1500:])
+        raise SystemExit("字体子集化失败")
+    print(f"font subset: {len(chars)} 字 → {dst.stat().st_size/1024:.0f} KB")
+
+
+def web_version() -> None:
+    """网页版：母版 180 MB 不能直接挂在网页上，重压成轻量版。
+    **分辨率必须保持 1920×1080**——页面要给人看的是这支片子的画质，
+    压到 720p 会让 e2e 的「1920×1080」断言直接拦下来（试过，就是这么发现的）。
+    母版比网页版新才重压，否则页面会悄悄播上一版片子。"""
+    master = OUT / "maojian.mp4"
+    web = OUT / "maojian-web.mp4"
+    if not master.exists():
+        return
+    if web.exists() and web.stat().st_mtime >= master.stat().st_mtime:
+        print("web 已最新", f"{web.stat().st_size/1024/1024:.0f} MB")
+        return
+    subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-i", str(master),
+                    "-c:v", "libx264", "-preset", "slow", "-crf", "28", "-pix_fmt", "yuv420p",
+                    "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+                    "-color_range", "tv", "-c:a", "aac", "-b:a", "128k",
+                    "-movflags", "+faststart", str(web)], check=True)
+    print("web", web.name, f"{web.stat().st_size/1024/1024:.0f} MB")
+
+
+def main() -> int:
+    SITE.mkdir(exist_ok=True)
+    ASSETS.mkdir(exist_ok=True)
+    stills()
+    cover()
+    web_version()
+    web = OUT / "maojian-web.mp4"
+    src = web if web.exists() else OUT / "maojian.mp4"
+    if src.exists():
+        shutil.copy2(src, ASSETS / "maojian.mp4")
+    shutil.copy2(OUT / "cover.jpg", ASSETS / "poster.jpg")
+    h = html()
+    font_subset(h)
+    (SITE / "index.html").write_text(h, encoding="utf-8")
+    man = ASSETS / "manifest.txt"
+    man.write_text("\n".join(
+        f"{p.name}\t{p.stat().st_size}\t{hashlib.sha256(p.read_bytes()).hexdigest()[:16]}"
+        for p in sorted(ASSETS.rglob("*")) if p.is_file()), encoding="utf-8")
+    print("wrote", SITE / "index.html", f"{(SITE/'index.html').stat().st_size/1024:.0f} KB")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

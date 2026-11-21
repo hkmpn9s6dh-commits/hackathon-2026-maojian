@@ -1,0 +1,11 @@
+out/
+keyframes/raw/
+keyframes/plate/
+keyframes/fix/
+\_*.jpg
+\_*.png
+__pycache__/
+*.pyc
+.subset/
+node_modules/
+keyframes/raw2/
